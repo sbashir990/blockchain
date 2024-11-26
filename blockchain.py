@@ -7,11 +7,21 @@ from datetime import datetime, timezone
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
-# Constants
+# constants
 BCHOC_FILE_PATH = os.getenv("BCHOC_FILE_PATH", "blockchain.dat")
-AES_KEY = b"R0chLi4uLi4uLi4="
+AES_KEY = b"R0chLi4uLi4uLi4="  
 BLOCK_FORMAT = "32s d 32s 32s 12s 12s 12s I"
 BLOCK_SIZE = struct.calcsize(BLOCK_FORMAT)
+REMOVAL_STATES = ["DISPOSED", "DESTROYED", "RELEASED"]
+
+# passwords
+PASSWORDS = {
+    "CREATOR": "C67C",
+    "POLICE": "P80P",
+    "ANALYST": "A65A",
+    "LAWYER": "L76L",
+    "EXECUTIVE": "E69E"
+}
 
 def encrypt_value(value):
     cipher = Cipher(algorithms.AES(AES_KEY), modes.ECB(), backend=default_backend())
@@ -20,7 +30,11 @@ def encrypt_value(value):
     if isinstance(value, uuid.UUID):
         padded_value = value.bytes.ljust(32, b"\0")
     elif isinstance(value, int):
-        padded_value = value.to_bytes(4, 'big').ljust(32, b"\0")
+        try:
+            padded_value = value.to_bytes(4, 'big').ljust(32, b"\0")
+        except OverflowError:
+            print(f"Error: Item ID {value} is out of range (must be 0 to 4294967295)")
+            exit(1)
     else:
         padded_value = value.ljust(32, b"\0")
     
@@ -33,19 +47,19 @@ def decrypt_value(encrypted_value):
 
 def create_initial_block():
     """
-    Creates the genesis block with a clearly invalid case_id to avoid misinterpretation.
+    Creates the genesis block with placeholder values.
     """
     placeholder_case_id = b"\0" * 32
     initial_block = struct.pack(
         BLOCK_FORMAT,
-        b"0" * 32,  # prev_hash
-        0,          # timestamp
-        placeholder_case_id,  # case_id (invalid placeholder)
-        b"0" * 32,  # evidence_id
+        b"\0" * 32,  # Corrected prev_hash to 32 null bytes
+        0.0,        # timestamp
+        placeholder_case_id,  # case_id
+        b"\0" * 32,  # evidence_id
         b"INITIAL\0\0\0\0\0",  # state
         b"\0" * 12, # creator
         b"\0" * 12, # owner
-        14          # data_length
+        14          # length
     ) + b"Initial block\0"
     
     with open(BCHOC_FILE_PATH, "wb") as f:
@@ -63,14 +77,12 @@ def get_blocks():
                 break
             
             fields = struct.unpack(BLOCK_FORMAT, block_header)
-            data = f.read(fields[7])
+            data_length = fields[7]
+            data = f.read(data_length)
             blocks.append((block_header, data))
     return blocks
 
 def init():
-    """
-    Initializes the blockchain by creating the genesis block if it doesn't exist.
-    """
     if os.path.exists(BCHOC_FILE_PATH):
         print("Blockchain file found with INITIAL block.")
     else:
@@ -78,9 +90,6 @@ def init():
         print("Blockchain file not found. Created INITIAL block.")
 
 def show_cases():
-    """
-    Displays all unique case IDs in the blockchain.
-    """
     blocks = get_blocks()
     unique_cases = set()
 
@@ -88,16 +97,13 @@ def show_cases():
         _, _, encrypted_case_id, _, _, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
         decrypted_case_id = decrypt_value(encrypted_case_id)
 
-        # Skip the genesis block (first block)
         if i == 0:
             continue
 
         try:
-            # Convert decrypted case_id bytes to UUID
             case_uuid = uuid.UUID(bytes=decrypted_case_id[:16])
             unique_cases.add(case_uuid)
         except ValueError:
-            # Skip invalid UUIDs
             continue
 
     if unique_cases:
@@ -108,40 +114,34 @@ def show_cases():
         print("No cases found in the blockchain.")
 
 def show_items(case_id, password):
-    """
-    Displays all items associated with a specific case ID.
-    """
-    if password != "C67C":  # Replace with appropriate password validation if required.
+    if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
 
     blocks = get_blocks()
     encrypted_case_id = encrypt_value(uuid.UUID(case_id))
-    unique_items = set()  # Use a set to avoid duplicates
+    unique_items = set() 
 
     for block_header, _ in blocks:
         _, _, curr_case_id, evidence_id, _, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
         if curr_case_id == encrypted_case_id:
             decrypted_item_id = decrypt_value(evidence_id)
             try:
-                # Convert decrypted_item_id to integer
+                # convert to int
                 item_id = int.from_bytes(decrypted_item_id.strip(b"\0"), "big")
-                unique_items.add(item_id)  # Add to the set
+                unique_items.add(item_id)  # adding to set
             except ValueError:
                 continue
 
     if unique_items:
         print(f"Items associated with case {case_id}:")
-        for item_id in sorted(unique_items):  # Sort for consistent output
+        for item_id in sorted(unique_items):  # sort
             print(f"- {item_id}")
     else:
         print(f"No items found for case {case_id}.")
 
-def show_history(item_id, password):
-    """
-    Displays the history of actions performed on a specific item.
-    """
-    if password != "C67C":  # Replace with appropriate password validation if required.
+def show_history(item_id, password, num_entries=None, reverse=False):
+    if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
 
@@ -150,27 +150,35 @@ def show_history(item_id, password):
     history = []
 
     for block_header, _ in blocks:
-        prev_hash, timestamp, case_id, evidence_id, state, creator, owner, _ = struct.unpack(BLOCK_FORMAT, block_header)
+        prev_hash, timestamp, case_id_enc, evidence_id, state, creator, owner, _ = struct.unpack(BLOCK_FORMAT, block_header)
         
         if evidence_id == encrypted_item_id:
-            decrypted_case_id = decrypt_value(case_id)
+            decrypted_case_id = decrypt_value(case_id_enc)
             decrypted_state = state.strip(b"\0").decode()
             decrypted_creator = creator.strip(b"\0").decode()
+            decrypted_owner = owner.strip(b"\0").decode()
             
             history.append({
                 "timestamp": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
                 "case_id": uuid.UUID(bytes=decrypted_case_id[:16]),
                 "state": decrypted_state,
-                "creator": decrypted_creator
+                "creator": decrypted_creator,
+                "owner": decrypted_owner
             })
 
+    if reverse:
+        history = history[::-1]
+
+    if num_entries is not None:
+        history = history[:num_entries]
+
     if history:
-        print(f"History for item {item_id}:")
         for record in history:
-            print(f"- Timestamp: {record['timestamp']}")
-            print(f"  Case ID: {record['case_id']}")
-            print(f"  State: {record['state']}")
-            print(f"  Creator: {record['creator']}")
+            print(f"Case: {record['case_id']}")
+            print(f"Item: {item_id}")
+            print(f"Action: {record['state']}")
+            print(f"Time: {record['timestamp']}")
+            print()
     else:
         print(f"No history found for item {item_id}.")
 
@@ -181,13 +189,13 @@ def get_item_latest_state(blocks, encrypted_item_id):
     for block_header, _ in blocks:
         _, _, curr_case_id, evidence_id, state, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
         if evidence_id == encrypted_item_id:
-            latest_state = state.strip(b"\0")
+            latest_state = state.strip(b"\0").decode()
             case_id = curr_case_id
     
     return latest_state, case_id
 
 def add(case_id, item_ids, creator, password):
-    if password != "C67C":
+    if password != PASSWORDS["CREATOR"]:
         print("Invalid password")
         exit(1)
     
@@ -200,28 +208,31 @@ def add(case_id, item_ids, creator, password):
     blocks = get_blocks()
     existing_items = set()
     
-    # Collect existing items
+    # get existing items
     for block_header, _ in blocks:
         _, _, _, evidence_id, _, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
-        if evidence_id != b"0" * 32:
+        if evidence_id != b"\0" * 32:
             existing_items.add(evidence_id)
     
-    # Check for duplicates
+    # check for duplicates
     for item_id in item_ids:
         encrypted_item_id = encrypt_value(item_id)
         if encrypted_item_id in existing_items:
             print(f"Error: Item ID {item_id} already exists in blockchain")
             exit(1)
     
-    # Add all items
+    prev_block_header, prev_block_data = blocks[-1]
+    
+    # adding items
     for item_id in item_ids:
         encrypted_item_id = encrypt_value(item_id)
-        prev_block_header, prev_block_data = blocks[-1]
         prev_hash = hashlib.sha256(prev_block_header + prev_block_data).digest()
         timestamp = datetime.now(timezone.utc).timestamp()
         encrypted_case_id = encrypt_value(case_uuid)
         
-        new_block = struct.pack(
+        block_data = b"New evidence"
+        data_length = len(block_data)
+        block_header = struct.pack(
             BLOCK_FORMAT,
             prev_hash,
             timestamp,
@@ -230,18 +241,24 @@ def add(case_id, item_ids, creator, password):
             b"CHECKEDIN\0\0\0",
             creator.encode().ljust(12, b"\0"),
             b"\0" * 12,
-            len(b"New evidence")
-        ) + b"New evidence"
+            data_length
+        )
+        new_block = block_header + block_data
         
         with open(BCHOC_FILE_PATH, "ab") as f:
             f.write(new_block)
+        
+        # have to update prev block and prev block data
+        prev_block_header = block_header
+        prev_block_data = block_data
         
         print(f"Added item: {item_id}")
         print("Status: CHECKEDIN")
         print(f"Time of action: {datetime.now(timezone.utc).isoformat()}")
 
+
 def checkout(item_id, password):
-    if password != "A65A":
+    if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
     
@@ -250,11 +267,11 @@ def checkout(item_id, password):
     
     latest_state, case_id = get_item_latest_state(blocks, encrypted_item_id)
     
-    if latest_state is None:
+    if latest_state is None or latest_state in REMOVAL_STATES:
         print(f"Error: Item {item_id} not found")
         exit(1)
     
-    if latest_state != b"CHECKEDIN":
+    if latest_state != "CHECKEDIN":
         print(f"Error: Item {item_id} is not in CHECKEDIN state")
         exit(1)
     
@@ -284,7 +301,7 @@ def checkout(item_id, password):
     print(f"Time of action: {datetime.now(timezone.utc).isoformat()}")
 
 def checkin(item_id, password):
-    if password != "P80P":
+    if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
     
@@ -293,11 +310,11 @@ def checkin(item_id, password):
     
     latest_state, case_id = get_item_latest_state(blocks, encrypted_item_id)
     
-    if latest_state is None:
+    if latest_state is None or latest_state in REMOVAL_STATES:
         print(f"Error: Item {item_id} not found")
         exit(1)
     
-    if latest_state != b"CHECKEDOUT":
+    if latest_state != "CHECKEDOUT":
         print(f"Error: Item {item_id} is not in CHECKEDOUT state")
         exit(1)
     
@@ -326,6 +343,162 @@ def checkin(item_id, password):
     print("Status: CHECKEDIN")
     print(f"Time of action: {datetime.now(timezone.utc).isoformat()}")
 
+def remove(item_id, reason, owner_info, password):
+    if password != PASSWORDS["CREATOR"]:
+        print("Invalid password")
+        exit(1)
+    
+    if reason not in REMOVAL_STATES:
+        print("Error: Invalid reason for removal")
+        exit(1)
+    
+    if reason == "RELEASED" and not owner_info:
+        print("Error: Owner information required for RELEASED reason")
+        exit(1)
+    
+    blocks = get_blocks()
+    encrypted_item_id = encrypt_value(item_id)
+    
+    latest_state, case_id = get_item_latest_state(blocks, encrypted_item_id)
+    
+    if latest_state is None or latest_state in REMOVAL_STATES:
+        print(f"Error: Item {item_id} not found")
+        exit(1)
+    
+    if latest_state != "CHECKEDIN":
+        print(f"Error: Item {item_id} must be in CHECKEDIN state to remove")
+        exit(1)
+    
+    prev_block_header, prev_block_data = blocks[-1]
+    data_payload = b"Item removed"
+    data_length = len(data_payload)
+    
+    # always 12 bytes
+    owner_bytes = owner_info.encode()[:12].ljust(12, b"\0") if owner_info else b"\0" * 12
+    timestamp = datetime.now(timezone.utc).timestamp()
+    prev_hash = hashlib.sha256(prev_block_header + prev_block_data).digest()
+    
+    block_header = struct.pack(
+        BLOCK_FORMAT,
+        prev_hash,
+        timestamp,
+        case_id,
+        encrypted_item_id,
+        reason.encode().ljust(12, b"\0"),
+        b"\0" * 12,
+        owner_bytes,
+        data_length
+    )
+    new_block = block_header + data_payload
+    
+    with open(BCHOC_FILE_PATH, "ab") as f:
+        f.write(new_block)
+    
+    prev_block_header = block_header
+    prev_block_data = data_payload
+    
+    decrypted_case_id = uuid.UUID(bytes=decrypt_value(case_id)[:16])
+    print(f"Case: {decrypted_case_id}")
+    print(f"Removed item: {item_id}")
+    print(f"Reason: {reason}")
+    if owner_info:
+        print(f"Owner: {owner_info}")
+    print(f"Time of action: {datetime.now(timezone.utc).isoformat()}")
+
+
+def verify():
+    blocks = get_blocks()
+    if not blocks:
+        print("No transactions found.")
+        return
+    
+    print(f"Transactions in blockchain: {len(blocks)}")
+    state = "CLEAN"
+    
+    prev_hash = None
+    item_states = {}
+    block_hashes = set()
+    
+    for index, (block_header, block_data) in enumerate(blocks):
+        block_content = block_header + block_data
+        curr_hash = hashlib.sha256(block_content).digest()
+        
+        if curr_hash in block_hashes:
+            state = "ERROR"
+            print(f"State of blockchain: {state}")
+            print(f"Bad block: {curr_hash.hex()}")
+            print("Duplicate block found.")
+            return
+        block_hashes.add(curr_hash)
+        
+        prev_block_hash, timestamp, case_id_enc, evidence_id_enc, state_bytes, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
+        
+        if index == 0:
+            prev_hash = curr_hash
+            continue
+        
+        expected_prev_hash = hashlib.sha256(blocks[index - 1][0] + blocks[index - 1][1]).digest()
+        if prev_block_hash != expected_prev_hash:
+            state = "ERROR"
+            print(f"State of blockchain: {state}")
+            print(f"Bad block: {curr_hash.hex()}")
+            print("Parent block hash mismatch.")
+            return
+        
+        evidence_id = decrypt_value(evidence_id_enc)
+        item_id = int.from_bytes(evidence_id.strip(b"\0"), "big")
+        action = state_bytes.strip(b"\0").decode()
+        
+        if action not in ["CHECKEDIN", "CHECKEDOUT", "DISPOSED", "DESTROYED", "RELEASED"]:
+            state = "ERROR"
+            print(f"State of blockchain: {state}")
+            print(f"Bad block: {curr_hash.hex()}")
+            print(f"Invalid action: {action}")
+            return
+        
+        if item_id not in item_states:
+            if action != "CHECKEDIN":
+                state = "ERROR"
+                print(f"State of blockchain: {state}")
+                print(f"Bad block: {curr_hash.hex()}")
+                print(f"Invalid initial action for item {item_id}: {action}")
+                return
+            item_states[item_id] = action
+        else:
+            prev_state = item_states[item_id]
+            if prev_state == "CHECKEDIN" and action == "CHECKEDIN":
+                state = "ERROR"
+                print(f"State of blockchain: {state}")
+                print(f"Bad block: {curr_hash.hex()}")
+                print(f"Item {item_id} already CHECKEDIN")
+                return
+            if prev_state == "CHECKEDOUT" and action == "CHECKEDOUT":
+                state = "ERROR"
+                print(f"State of blockchain: {state}")
+                print(f"Bad block: {curr_hash.hex()}")
+                print(f"Item {item_id} already CHECKEDOUT")
+                return
+            if prev_state in REMOVAL_STATES:
+                state = "ERROR"
+                print(f"State of blockchain: {state}")
+                print(f"Bad block: {curr_hash.hex()}")
+                print(f"Action after removal on item {item_id}")
+                return
+            item_states[item_id] = action
+        
+        prev_hash = curr_hash
+    
+    print(f"State of blockchain: {state}")
+
+def validate_item_id(value):
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid item ID {value}")
+    if ivalue < 0 or ivalue > 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError(f"Item ID {value} is out of range (must be 0 to 4294967295)")
+    return ivalue
+
 if __name__ == "__main__":
     import argparse
     # Argument Parser
@@ -338,28 +511,38 @@ if __name__ == "__main__":
     # Add command
     parser_add = subparsers.add_parser("add", help="Add new items to a specific case.")
     parser_add.add_argument("-c", "--case_id", required=True, type=str, help="The case ID to associate items with.")
-    parser_add.add_argument("-i", "--item_ids", required=True, type=int, nargs="+", help="List of item IDs to add.")
+    parser_add.add_argument("-i", "--item_ids", required=True, type=validate_item_id, nargs="+", help="List of item IDs to add.")
     parser_add.add_argument("-g", "--creator", required=True, type=str, help="The creator of the items.")
     parser_add.add_argument("-p", "--password", required=True, type=str, help="Password for authentication.")
 
     # Checkout command
     parser_checkout = subparsers.add_parser("checkout", help="Checkout an item.")
-    parser_checkout.add_argument("-i", "--item_id", required=True, type=int, help="The ID of the item to checkout.")
+    parser_checkout.add_argument("-i", "--item_id", required=True, type=validate_item_id, help="The ID of the item to checkout.")
     parser_checkout.add_argument("-p", "--password", required=True, type=str, help="Password for authentication.")
 
     # Checkin command
     parser_checkin = subparsers.add_parser("checkin", help="Checkin an item.")
-    parser_checkin.add_argument("-i", "--item_id", required=True, type=int, help="The ID of the item to checkin.")
+    parser_checkin.add_argument("-i", "--item_id", required=True, type=validate_item_id, help="The ID of the item to checkin.")
     parser_checkin.add_argument("-p", "--password", required=True, type=str, help="Password for authentication.")
+
+    # Remove command
+    parser_remove = subparsers.add_parser("remove", help="Remove an item from further action.")
+    parser_remove.add_argument("-i", "--item_id", required=True, type=validate_item_id, help="The ID of the item to remove.")
+    parser_remove.add_argument("-y", "--why", required=True, type=str, help="Reason for removal.")
+    parser_remove.add_argument("-o", "--owner", type=str, help="Owner information if reason is RELEASED.")
+    parser_remove.add_argument("-p", "--password", required=True, type=str, help="Password for authentication.")
+
+    # Verify command
+    parser_verify = subparsers.add_parser("verify", help="Verify the integrity of the blockchain.")
 
     # Show command
     parser_show = subparsers.add_parser("show", help="Show blockchain information.")
-    parser_show.add_argument("--cases", action="store_true", help="List all unique case IDs.")
-    parser_show.add_argument("--items", action="store_true", help="List all items for a specific case ID.")
-    parser_show.add_argument("--history", action="store_true", help="Show the history of a specific item.")
+    parser_show.add_argument("show_command", choices=["cases", "items", "history"], help="What to show.")
     parser_show.add_argument("-c", "--case_id", type=str, help="Case ID for filtering items.")
-    parser_show.add_argument("-i", "--item_id", type=int, help="Item ID to display history for.")
+    parser_show.add_argument("-i", "--item_id", type=validate_item_id, help="Item ID to display history for.")
     parser_show.add_argument("-p", "--password", type=str, help="Password for authentication.")
+    parser_show.add_argument("-n", "--num_entries", type=int, help="Number of entries to display.")
+    parser_show.add_argument("-r", "--reverse", action="store_true", help="Display in reverse order.")
 
     args = parser.parse_args()
 
@@ -372,13 +555,17 @@ if __name__ == "__main__":
             checkout(args.item_id, args.password)
         elif args.command == "checkin":
             checkin(args.item_id, args.password)
+        elif args.command == "remove":
+            remove(args.item_id, args.why.upper(), args.owner, args.password)
+        elif args.command == "verify":
+            verify()
         elif args.command == "show":
-            if args.cases:
+            if args.show_command == "cases":
                 show_cases()
-            elif args.items and args.case_id and args.password:
+            elif args.show_command == "items" and args.case_id and args.password:
                 show_items(args.case_id, args.password)
-            elif args.history and args.item_id and args.password:
-                show_history(args.item_id, args.password)
+            elif args.show_command == "history" and args.item_id and args.password:
+                show_history(args.item_id, args.password, args.num_entries, args.reverse)
             else:
                 print("Error: Missing required arguments for 'show' command.")
                 parser.print_help()
