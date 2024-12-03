@@ -50,35 +50,40 @@ def create_initial_block():
     Creates the genesis block with placeholder values.
     """
     placeholder_case_id = b"\0" * 32
+    data_payload = b""
+    data_length = 0
     initial_block = struct.pack(
         BLOCK_FORMAT,
-        b"\0" * 32,  # Corrected prev_hash to 32 null bytes
-        0.0,        # timestamp
-        placeholder_case_id,  # case_id
-        b"\0" * 32,  # evidence_id
-        b"INITIAL\0\0\0\0\0",  # state
-        b"\0" * 12, # creator
-        b"\0" * 12, # owner
-        14          # length
-    ) + b"Initial block\0"
-    
+        b"\0" * 32,           # prev_hash (32 null bytes)
+        0.0,                  # timestamp
+        placeholder_case_id,  # case_id (32 null bytes)
+        b"\0" * 32,           # evidence_id (32 null bytes)
+        b"INITIAL".ljust(12, b"\0"),  # state (12 bytes, padded)
+        b"\0" * 12,           # creator (12 null bytes)
+        b"\0" * 12,           # owner (12 null bytes)
+        data_length           # data_length (0)
+    ) + data_payload         # data_payload (empty)
+
     with open(BCHOC_FILE_PATH, "wb") as f:
         f.write(initial_block)
 
 def get_blocks():
     if not os.path.exists(BCHOC_FILE_PATH):
         create_initial_block()
-    
+
     blocks = []
     with open(BCHOC_FILE_PATH, "rb") as f:
         while True:
             block_header = f.read(BLOCK_SIZE)
-            if not block_header or len(block_header) < BLOCK_SIZE:
-                break
-            
+            if not block_header:
+                break  # EOF
+            if len(block_header) < BLOCK_SIZE:
+                raise ValueError("Invalid block header length in blockchain file.")
             fields = struct.unpack(BLOCK_FORMAT, block_header)
             data_length = fields[7]
             data = f.read(data_length)
+            if len(data) < data_length:
+                raise ValueError("Invalid block data length in blockchain file.")
             blocks.append((block_header, data))
     return blocks
 
@@ -350,37 +355,60 @@ def remove(item_id, reason, owner_info, password):
     if password != PASSWORDS["CREATOR"]:
         print("Invalid password")
         exit(1)
-    
+
     if reason not in REMOVAL_STATES:
         print("Error: Invalid reason for removal")
         exit(1)
-    
-    if reason == "RELEASED" and not owner_info:
-        print("Error: Owner information required for RELEASED reason")
-        exit(1)
-    
+
+    # Removed the owner_info check
+
     blocks = get_blocks()
     latest_state, case_id_enc = get_item_latest_state(blocks, item_id)
-    
+
     if latest_state is None or latest_state in REMOVAL_STATES:
         print(f"Error: Item {item_id} not found")
         exit(1)
-    
+
     if latest_state != "CHECKEDIN":
         print(f"Error: Item {item_id} must be in CHECKEDIN state to remove")
         exit(1)
-    
+
+    # Retrieve the original creator
+    creator = None
+    for block_header, _ in blocks:
+        _, _, _, evidence_id_enc, _, creator_bytes, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
+        decrypted_evidence_id = decrypt_value(evidence_id_enc)
+        evidence_item_id = int.from_bytes(decrypted_evidence_id.strip(b"\0"), 'big')
+        if evidence_item_id == item_id:
+            creator = creator_bytes.strip(b"\0").decode()
+            break  # Found the initial 'add' block
+
+    if creator is None:
+        print(f"Error: Creator not found for item {item_id}")
+        exit(1)
+
     prev_block_header, prev_block_data = blocks[-1]
-    data_payload = b"Item removed"
-    data_length = len(data_payload)
-    
-    # Always 12 bytes
-    owner_bytes = owner_info.encode()[:12].ljust(12, b"\0") if owner_info else b"\0" * 12
+    data_payload = b""
+    data_length = 0
+
+    # Map password to role
+    role = None
+    for key, value in PASSWORDS.items():
+        if value == password:
+            role = key
+            break
+    if role is None:
+        print("Invalid password")
+        exit(1)
+
+    # Set 'owner' to the user's role
+    owner = role.encode().ljust(12, b"\0")
+
     timestamp = datetime.now(timezone.utc).timestamp()
     prev_hash = hashlib.sha256(prev_block_header + prev_block_data).digest()
-    
+
     encrypted_item_id = encrypt_value(item_id)
-    
+
     block_header = struct.pack(
         BLOCK_FORMAT,
         prev_hash,
@@ -388,15 +416,15 @@ def remove(item_id, reason, owner_info, password):
         case_id_enc,
         encrypted_item_id,
         reason.encode().ljust(12, b"\0"),
-        b"\0" * 12,
-        owner_bytes,
+        creator.encode().ljust(12, b"\0"),
+        owner,
         data_length
     )
     new_block = block_header + data_payload
-    
+
     with open(BCHOC_FILE_PATH, "ab") as f:
         f.write(new_block)
-    
+
     decrypted_case_id = uuid.UUID(bytes=decrypt_value(case_id_enc)[:16])
     print(f"Case: {decrypted_case_id}")
     print(f"Removed item: {item_id}")
@@ -510,7 +538,7 @@ if __name__ == "__main__":
     # Add command
     parser_add = subparsers.add_parser("add", help="Add new items to a specific case.")
     parser_add.add_argument("-c", "--case_id", required=True, type=str, help="The case ID to associate items with.")
-    parser_add.add_argument("-i", "--item_ids", required=True, type=validate_item_id, nargs="+", help="List of item IDs to add.")
+    parser_add.add_argument("-i", "--item_ids", required=True, type=validate_item_id, action='append', help="List of item IDs to add.")
     parser_add.add_argument("-g", "--creator", required=True, type=str, help="The creator of the items.")
     parser_add.add_argument("-p", "--password", required=True, type=str, help="Password for authentication.")
 
@@ -575,4 +603,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {str(e)}")
         exit(1)
-
