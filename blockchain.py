@@ -10,7 +10,7 @@ from cryptography.hazmat.backends import default_backend
 # constants
 BCHOC_FILE_PATH = os.getenv("BCHOC_FILE_PATH", "blockchain.dat")
 AES_KEY = b"R0chLi4uLi4uLi4="  
-BLOCK_FORMAT = "<32s d 32s 32s 12s 12s 12s I"
+BLOCK_FORMAT = "32s d 32s 32s 12s 12s 12s I"
 BLOCK_SIZE = struct.calcsize(BLOCK_FORMAT)
 REMOVAL_STATES = ["DISPOSED", "DESTROYED", "RELEASED"]
 
@@ -50,19 +50,19 @@ def create_initial_block():
     Creates the genesis block with placeholder values.
     """
     placeholder_case_id = b"\0" * 32
-    data_payload = b"Initial block\0"  # Include null terminator
-    data_length = len(data_payload)
+    data_payload = b""
+    data_length = 0
     initial_block = struct.pack(
         BLOCK_FORMAT,
-        b"\0" * 32,                      # prev_hash: bytes
-        0.0,                             # timestamp: float
-        placeholder_case_id,             # case_id: bytes
-        b"\0" * 32,                      # evidence_id: bytes
-        b"INITIAL\0".ljust(12, b"\0"),   # state: bytes with null terminator and padded to 12 bytes
-        b"\0" * 12,                      # creator: bytes
-        b"\0" * 12,                      # owner: bytes
-        data_length                      # data_length: int
-    ) + data_payload                    # data_payload: bytes
+        b"\0" * 32,           # prev_hash (32 null bytes)
+        0.0,                  # timestamp
+        placeholder_case_id,  # case_id (32 null bytes)
+        b"\0" * 32,           # evidence_id (32 null bytes)
+        b"INITIAL".ljust(12, b"\0"),  # state (12 bytes, padded)
+        b"\0" * 12,           # creator (12 null bytes)
+        b"\0" * 12,           # owner (12 null bytes)
+        data_length           # data_length (0)
+    ) + data_payload         # data_payload (empty)
 
     with open(BCHOC_FILE_PATH, "wb") as f:
         f.write(initial_block)
@@ -70,7 +70,7 @@ def create_initial_block():
 def get_blocks():
     if not os.path.exists(BCHOC_FILE_PATH):
         create_initial_block()
-    
+
     blocks = []
     with open(BCHOC_FILE_PATH, "rb") as f:
         while True:
@@ -119,18 +119,14 @@ def show_cases():
         except ValueError:
             continue
 
-    if unique_cases:
-        print("Unique case IDs in the blockchain:")
+    if unique_cases: # merge entire statement
+        #print("Unique case IDs in the blockchain:")
         for case_id in unique_cases:
-            print(f"- {case_id}")
+            print(f"{case_id}") #remove dash PASS FOR 059
     else:
         print("No cases found in the blockchain.")
 
-def show_items(case_id, password):
-    if password not in PASSWORDS.values():
-        print("Invalid password")
-        exit(1)
-
+def show_items(case_id): # merge entire funciton
     blocks = get_blocks()
     encrypted_case_id = encrypt_value(uuid.UUID(case_id))
     unique_items = set() 
@@ -140,16 +136,15 @@ def show_items(case_id, password):
         if curr_case_id == encrypted_case_id:
             decrypted_item_id = decrypt_value(evidence_id_enc)
             try:
-                # Convert to int
                 item_id = int.from_bytes(decrypted_item_id.strip(b"\0"), "big")
                 unique_items.add(item_id)
             except ValueError:
                 continue
 
     if unique_items:
-        print(f"Items associated with case {case_id}:")
+        #print(f"Items associated with case {case_id}:")
         for item_id in sorted(unique_items):
-            print(f"- {item_id}")
+            print(f"{item_id}") # remove dash PASS 060
     else:
         print(f"No items found for case {case_id}.")
 
@@ -249,7 +244,8 @@ def add(case_id, item_ids, creator, password):
         
         block_data = b"New evidence"
         data_length = len(block_data)
-        block_header = struct.pack(BLOCK_FORMAT,
+        block_header = struct.pack(
+            BLOCK_FORMAT,
             prev_hash,
             timestamp,
             encrypted_case_id,
@@ -596,10 +592,13 @@ if __name__ == "__main__":
         elif args.command == "show":
             if args.show_command == "cases":
                 show_cases()
-            elif args.show_command == "items" and args.case_id and args.password:
-                show_items(args.case_id, args.password)
-            elif args.show_command == "history" and args.item_id and args.password:
-                show_history(args.item_id, args.password, args.num_entries, args.reverse)
+            elif args.show_command == "items" and args.case_id: #remove and password #merge this fix
+                show_items(args.case_id) #remove password
+            #elif args.show_command == "history" and args.item_id and args.password:
+                #show_history(args.item_id, args.password, args.num_entries, args.reverse)
+            elif args.show_command == "history" and args.password:
+                show_history(item_id=args.item_id, password=args.password, num_entries=args.num_entries, reverse=args.reverse)
+
             else:
                 print("Error: Missing required arguments for 'show' command.")
                 parser.print_help()
