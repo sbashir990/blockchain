@@ -214,11 +214,11 @@ def show_history(item_id=None, password=None, num_entries=None, reverse=False):
             print(f"Action: {record['state']}")
             print(f"Time: {record['timestamp']}")
             print()
-    else:
-        if item_id is not None:
-            print(f"No history found for item {item_id}.")
-        else:
-            print("No history found.")
+    #else:
+        #if item_id is not None:
+            #print(f"No history found for item {item_id}.")
+        #elif:
+            #print("No history found.")
 
 
 def get_item_latest_state(blocks, item_id):
@@ -639,4 +639,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {str(e)}")
         exit(1)
-        
