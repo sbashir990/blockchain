@@ -152,13 +152,23 @@ def show_items(case_id): # merge entire funciton
     else:
         print(f"No items found for case {case_id}.")
 
-def show_history(item_id=None, password=None, num_entries=None, reverse=False):
+
+def show_history(item_id=None, case_id=None, password=None, num_entries=None, reverse=False):
     if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
 
     blocks = get_blocks()
     history = []
+
+    # Parse the provided case_id into a UUID object
+    case_uuid_filter = None
+    if case_id is not None:
+        try:
+            case_uuid_filter = uuid.UUID(case_id)
+        except ValueError:
+            print(f"Error: Invalid case ID format: {case_id}")
+            exit(1)
 
     for index, (block_header, _) in enumerate(blocks):
         prev_hash, timestamp, case_id_enc, evidence_id_enc, state, creator, owner, _ = struct.unpack(BLOCK_FORMAT, block_header)
@@ -187,7 +197,13 @@ def show_history(item_id=None, password=None, num_entries=None, reverse=False):
         if record_timestamp.endswith('+0000'):
             record_timestamp = record_timestamp[:-5] + '+00:00'
 
-        if item_id is None or evidence_item_id == item_id:
+        include_entry = True
+        if item_id is not None and evidence_item_id != item_id:
+            include_entry = False
+        if case_uuid_filter is not None and case_uuid != case_uuid_filter:
+            include_entry = False
+
+        if include_entry:
             history.append({
                 "timestamp": record_timestamp,
                 "timestamp_dt": dt,
@@ -214,26 +230,26 @@ def show_history(item_id=None, password=None, num_entries=None, reverse=False):
             print(f"Action: {record['state']}")
             print(f"Time: {record['timestamp']}")
             print()
-    #else:
-        #if item_id is not None:
-            #print(f"No history found for item {item_id}.")
-        #elif:
-            #print("No history found.")
+
 
 
 def get_item_latest_state(blocks, item_id):
     latest_state = None
     case_id_enc = None
     
-    for block_header, _ in blocks:
+    for block_header, _ in reversed(blocks):
         _, _, curr_case_id_enc, evidence_id_enc, state, _, _, _ = struct.unpack(BLOCK_FORMAT, block_header)
-        decrypted_evidence_id = decrypt_value(evidence_id_enc)
-        evidence_item_id = int.from_bytes(decrypted_evidence_id.strip(b"\0"), 'big')
+        decrypted_evidence_id_bytes = decrypt_value(evidence_id_enc)
+        if len(decrypted_evidence_id_bytes) < 4:
+            continue  # Skip invalid entries
+        evidence_item_id = int.from_bytes(decrypted_evidence_id_bytes[:4], 'big')
         if evidence_item_id == item_id:
             latest_state = state.strip(b"\0").decode()
             case_id_enc = curr_case_id_enc
+            break  # Found the latest block for the item
     
     return latest_state, case_id_enc
+
 
 def add(case_id, item_ids, creator, password):
     if password != PASSWORDS["CREATOR"]:
@@ -302,6 +318,12 @@ def checkout(item_id, password):
     if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
+    
+    role = None
+    for key, value in PASSWORDS.items():
+        if value == password:
+            role = key
+            break
     
     blocks = get_blocks()
     latest_state, case_id_enc = get_item_latest_state(blocks, item_id)
@@ -627,7 +649,7 @@ if __name__ == "__main__":
             #elif args.show_command == "history" and args.item_id and args.password:
                 #show_history(args.item_id, args.password, args.num_entries, args.reverse)
             elif args.show_command == "history" and args.password:
-                show_history(item_id=args.item_id, password=args.password, num_entries=args.num_entries, reverse=args.reverse)
+                show_history(item_id=args.item_id, case_id=args.case_id, password=args.password, num_entries=args.num_entries, reverse=args.reverse)
 
             else:
                 print("Error: Missing required arguments for 'show' command.")
