@@ -49,18 +49,20 @@ def create_initial_block():
     """
     Creates the genesis block with placeholder values.
     """
-    placeholder_case_id = b"\0" * 32
-    data_payload = b""
-    data_length = 0
+    placeholder_case_id = b'0' * 32
+    placeholder_evidence_id = b'0' * 32
+    state = b'INITIAL' + b'\0' * 5
+    data_payload = b'Initial block\x00'
+    data_length = len(data_payload)
     initial_block = struct.pack(
         BLOCK_FORMAT,
-        b"\0" * 32,           # prev_hash (32 null bytes)
+        b'\0' * 32,           # prev_hash (32 null bytes)
         0.0,                  # timestamp
         placeholder_case_id,  # case_id (32 null bytes)
-        b"\0" * 32,           # evidence_id (32 null bytes)
-        b"INITIAL".ljust(12, b"\0"),  # state (12 bytes, padded)
-        b"\0" * 12,           # creator (12 null bytes)
-        b"\0" * 12,           # owner (12 null bytes)
+        placeholder_evidence_id,           # evidence_id (32 null bytes)
+        state,  # state (12 bytes, padded)
+        b'\0' * 12,           # creator (12 null bytes)
+        b'\0' * 12,           # owner (12 null bytes)
         data_length           # data_length (0)
     ) + data_payload         # data_payload (empty)
 
