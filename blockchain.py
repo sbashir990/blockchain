@@ -54,10 +54,12 @@ def create_initial_block():
     state = b'INITIAL' + b'\0' * 5
     data_payload = b'Initial block\x00'
     data_length = len(data_payload)
+    timestamp = datetime.now(timezone.utc).timestamp()  # Set to current time
+
     initial_block = struct.pack(
         BLOCK_FORMAT,
         b'\0' * 32,           # prev_hash (32 null bytes)
-        0.0,                  # timestamp
+        timestamp,                  # timestamp
         placeholder_case_id,  # case_id (32 null bytes)
         placeholder_evidence_id,           # evidence_id (32 null bytes)
         state,  # state (12 bytes, padded)
@@ -150,7 +152,7 @@ def show_items(case_id): # merge entire funciton
     else:
         print(f"No items found for case {case_id}.")
 
-def show_history(item_id, password, num_entries=None, reverse=False):
+def show_history(item_id=None, password=None, num_entries=None, reverse=False):
     if password not in PASSWORDS.values():
         print("Invalid password")
         exit(1)
@@ -158,24 +160,46 @@ def show_history(item_id, password, num_entries=None, reverse=False):
     blocks = get_blocks()
     history = []
 
-    for block_header, _ in blocks:
+    for index, (block_header, _) in enumerate(blocks):
         prev_hash, timestamp, case_id_enc, evidence_id_enc, state, creator, owner, _ = struct.unpack(BLOCK_FORMAT, block_header)
-        decrypted_evidence_id = decrypt_value(evidence_id_enc)
-        evidence_item_id = int.from_bytes(decrypted_evidence_id.strip(b"\0"), 'big')
-        
-        if evidence_item_id == item_id:
+        decrypted_state = state.strip(b"\0").decode()
+        decrypted_creator = creator.strip(b"\0").decode()
+        decrypted_owner = owner.strip(b"\0").decode()
+
+        if index == 0:
+            # Handle the initial block separately
+            case_uuid = uuid.UUID(int=0)
+            evidence_item_id = 0
+        else:
             decrypted_case_id = decrypt_value(case_id_enc)
-            decrypted_state = state.strip(b"\0").decode()
-            decrypted_creator = creator.strip(b"\0").decode()
-            decrypted_owner = owner.strip(b"\0").decode()
-            
+            decrypted_evidence_id = decrypt_value(evidence_id_enc)
+
+            try:
+                case_uuid = uuid.UUID(bytes=decrypted_case_id[:16])
+                evidence_item_id = int.from_bytes(decrypted_evidence_id.strip(b"\0"), 'big')
+            except ValueError:
+                continue  # Skip invalid entries
+
+        action = decrypted_state
+        dt = datetime.fromtimestamp(timestamp, timezone.utc)
+        record_timestamp = dt.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        # Adjust timezone format from +0000 to +00:00
+        if record_timestamp.endswith('+0000'):
+            record_timestamp = record_timestamp[:-5] + '+00:00'
+
+        if item_id is None or evidence_item_id == item_id:
             history.append({
-                "timestamp": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
-                "case_id": uuid.UUID(bytes=decrypted_case_id[:16]),
-                "state": decrypted_state,
+                "timestamp": record_timestamp,
+                "timestamp_dt": dt,
+                "case_id": case_uuid,
+                "item_id": evidence_item_id,
+                "state": action,
                 "creator": decrypted_creator,
                 "owner": decrypted_owner
             })
+
+    # Sort the history by timestamp in ascending order
+    history.sort(key=lambda x: x['timestamp_dt'])
 
     if reverse:
         history = history[::-1]
@@ -186,12 +210,16 @@ def show_history(item_id, password, num_entries=None, reverse=False):
     if history:
         for record in history:
             print(f"Case: {record['case_id']}")
-            print(f"Item: {item_id}")
+            print(f"Item: {record['item_id']}")
             print(f"Action: {record['state']}")
             print(f"Time: {record['timestamp']}")
             print()
     else:
-        print(f"No history found for item {item_id}.")
+        if item_id is not None:
+            print(f"No history found for item {item_id}.")
+        else:
+            print("No history found.")
+
 
 def get_item_latest_state(blocks, item_id):
     latest_state = None
